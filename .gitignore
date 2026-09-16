@@ -1,0 +1,11 @@
+.venv/
+*.csv
+*.json
+
+.env
+.env.*
+
+__pycache__/
+*.pyc
+
+.streamlit/secrets.toml
