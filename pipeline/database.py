@@ -20,28 +20,61 @@ load_dotenv()
 
 
 # ============================================================
-# CONFIGURACIÓN DE BASE DE DATOS
+# OBTENER URL DE SUPABASE
 # ============================================================
 
 def obtener_database_url():
     """
-    Obtiene la URL de PostgreSQL/Supabase en el momento
-    en que se necesita.
+    Obtiene la URL de PostgreSQL/Supabase.
 
-    Esto permite utilizar:
-    - .env en entorno local
-    - Streamlit Secrets en producción
+    Orden de búsqueda:
+    1. Variable de entorno DATABASE_URL
+    2. Streamlit Secrets
+
+    En local se utiliza normalmente .env.
+    En Streamlit Cloud se utiliza Secrets.
     """
 
-    return os.getenv("DATABASE_URL")
+    # --------------------------------------------------------
+    # 1. Variable de entorno
+    # --------------------------------------------------------
 
+    database_url = os.getenv("DATABASE_URL")
+
+    if database_url:
+        return database_url
+
+    # --------------------------------------------------------
+    # 2. Streamlit Secrets
+    # --------------------------------------------------------
+
+    try:
+
+        import streamlit as st
+
+        if "DATABASE_URL" in st.secrets:
+
+            return st.secrets["DATABASE_URL"]
+
+    except Exception:
+
+        pass
+
+    return None
+
+
+# ============================================================
+# DETERMINAR MOTOR DE BASE DE DATOS
+# ============================================================
 
 def usa_postgresql():
     """
-    Determina si debemos utilizar PostgreSQL/Supabase.
+    Devuelve True si existe una DATABASE_URL.
     """
 
-    return bool(obtener_database_url())
+    return bool(
+        obtener_database_url()
+    )
 
 
 # ============================================================
@@ -49,11 +82,17 @@ def usa_postgresql():
 # ============================================================
 
 def obtener_conexion():
+    """
+    Devuelve una conexión a:
+
+    - Supabase/PostgreSQL cuando DATABASE_URL existe.
+    - SQLite cuando se ejecuta localmente sin DATABASE_URL.
+    """
 
     database_url = obtener_database_url()
 
     # --------------------------------------------------------
-    # PostgreSQL / Supabase
+    # SUPABASE / POSTGRESQL
     # --------------------------------------------------------
 
     if database_url:
@@ -64,7 +103,7 @@ def obtener_conexion():
         )
 
     # --------------------------------------------------------
-    # SQLite local
+    # SQLITE LOCAL
     # --------------------------------------------------------
 
     SQLITE_PATH.parent.mkdir(
@@ -84,7 +123,7 @@ def obtener_conexion():
 def crear_tablas():
 
     # ========================================================
-    # PostgreSQL / Supabase
+    # POSTGRESQL / SUPABASE
     # ========================================================
 
     if usa_postgresql():
@@ -92,6 +131,10 @@ def crear_tablas():
         conexion = obtener_conexion()
 
         cursor = conexion.cursor()
+
+        # ----------------------------------------------------
+        # Leads
+        # ----------------------------------------------------
 
         cursor.execute(
             """
@@ -122,6 +165,10 @@ def crear_tablas():
             """
         )
 
+        # ----------------------------------------------------
+        # Extracciones IA
+        # ----------------------------------------------------
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS extracciones_ia (
@@ -150,12 +197,16 @@ def crear_tablas():
         return
 
     # ========================================================
-    # SQLite local
+    # SQLITE LOCAL
     # ========================================================
 
     conexion = obtener_conexion()
 
     cursor = conexion.cursor()
+
+    # --------------------------------------------------------
+    # Leads
+    # --------------------------------------------------------
 
     cursor.execute(
         """
@@ -185,6 +236,10 @@ def crear_tablas():
         )
         """
     )
+
+    # --------------------------------------------------------
+    # Extracciones IA
+    # --------------------------------------------------------
 
     cursor.execute(
         """
@@ -248,6 +303,7 @@ def convertir_booleano(valor):
             "sí",
             "yes"
         ]:
+
             return True
 
         if valor_normalizado in [
@@ -255,9 +311,31 @@ def convertir_booleano(valor):
             "0",
             "no"
         ]:
+
             return False
 
     return bool(valor)
+
+
+# ============================================================
+# CONVERTIR NAN A NONE
+# ============================================================
+
+def limpiar_valor(valor):
+
+    try:
+
+        if pd.isna(valor):
+            return None
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        pass
+
+    return valor
 
 
 # ============================================================
@@ -378,7 +456,9 @@ def guardar_leads(df):
             # ------------------------------------------------
 
             fecha = pd.to_datetime(
-                fila["fecha_registro_normalizada"],
+                fila[
+                    "fecha_registro_normalizada"
+                ],
                 errors="coerce"
             )
 
@@ -395,47 +475,43 @@ def guardar_leads(df):
             # ------------------------------------------------
 
             tiene_conversacion = convertir_booleano(
-                fila["tiene_conversacion"]
+                fila[
+                    "tiene_conversacion"
+                ]
             )
 
             # ------------------------------------------------
-            # Convertir NaN a None
+            # Construir registro
             # ------------------------------------------------
 
-            valores = []
+            registro = []
 
             for columna in columnas:
 
-                if columna == "fecha_registro_normalizada":
+                if columna == (
+                    "fecha_registro_normalizada"
+                ):
 
-                    valores.append(fecha)
+                    valor = fecha
 
-                elif columna == "tiene_conversacion":
+                elif columna == (
+                    "tiene_conversacion"
+                ):
 
-                    valores.append(
-                        tiene_conversacion
-                    )
+                    valor = tiene_conversacion
 
                 else:
 
-                    valor = fila[columna]
+                    valor = limpiar_valor(
+                        fila[columna]
+                    )
 
-                    try:
-
-                        if pd.isna(valor):
-                            valor = None
-
-                    except (
-                        TypeError,
-                        ValueError
-                    ):
-
-                        pass
-
-                    valores.append(valor)
+                registro.append(
+                    valor
+                )
 
             registros.append(
-                tuple(valores)
+                tuple(registro)
             )
 
         conexion = obtener_conexion()
@@ -469,6 +545,14 @@ def guardar_leads(df):
         )
     )
 
+    datos[
+        "tiene_conversacion"
+    ] = datos[
+        "tiene_conversacion"
+    ].apply(
+        convertir_booleano
+    )
+
     conexion = obtener_conexion()
 
     cursor = conexion.cursor()
@@ -490,13 +574,20 @@ def guardar_leads(df):
         )
     """
 
-    registros = [
-        tuple(fila)
-        for fila in datos.itertuples(
-            index=False,
-            name=None
+    registros = []
+
+    for _, fila in datos.iterrows():
+
+        registro = tuple(
+            limpiar_valor(
+                valor
+            )
+            for valor in fila
         )
-    ]
+
+        registros.append(
+            registro
+        )
 
     cursor.executemany(
         sql,
@@ -535,7 +626,9 @@ def guardar_extracciones_ia(df):
         return
 
     datos = datos[
-        datos["confianza_extraccion"].notna()
+        datos[
+            "confianza_extraccion"
+        ].notna()
     ].copy()
 
     if datos.empty:
@@ -603,13 +696,13 @@ def guardar_extracciones_ia(df):
 
         for _, fila in datos.iterrows():
 
+            # ------------------------------------------------
+            # Modelos alternativos
+            # ------------------------------------------------
+
             modelos = fila[
                 "modelos_alternativos"
             ]
-
-            # ------------------------------------------------
-            # Convertir modelos alternativos a JSON válido
-            # ------------------------------------------------
 
             if modelos is None:
 
@@ -655,50 +748,49 @@ def guardar_extracciones_ia(df):
                     modelos_json = None
 
             # ------------------------------------------------
-            # Convertir valores NaN
+            # Registro
             # ------------------------------------------------
 
-            valores = [
+            registro = [
                 fila["lead_id"],
-                fila["modelo_conversacion"],
+                fila[
+                    "modelo_conversacion"
+                ],
                 modelos_json,
                 fila["presupuesto"],
                 fila["cuota_inicial"],
                 fila["forma_pago"],
                 fila["intencion_compra"],
-                fila["objecion_principal"],
+                fila[
+                    "objecion_principal"
+                ],
                 convertir_booleano(
-                    fila["solicita_cotizacion"]
+                    fila[
+                        "solicita_cotizacion"
+                    ]
                 ),
                 convertir_booleano(
-                    fila["solicita_visita"]
+                    fila[
+                        "solicita_visita"
+                    ]
                 ),
-                fila["resumen_conversacion"],
-                fila["confianza_extraccion"],
+                fila[
+                    "resumen_conversacion"
+                ],
+                fila[
+                    "confianza_extraccion"
+                ],
             ]
 
-            valores_limpios = []
-
-            for valor in valores:
-
-                try:
-
-                    if pd.isna(valor):
-                        valor = None
-
-                except (
-                    TypeError,
-                    ValueError
-                ):
-
-                    pass
-
-                valores_limpios.append(
+            registro = [
+                limpiar_valor(
                     valor
                 )
+                for valor in registro
+            ]
 
             registros.append(
-                tuple(valores_limpios)
+                tuple(registro)
             )
 
         conexion = obtener_conexion()
@@ -733,6 +825,22 @@ def guardar_extracciones_ia(df):
             if isinstance(x, list)
             else x
         )
+    )
+
+    datos[
+        "solicita_cotizacion"
+    ] = datos[
+        "solicita_cotizacion"
+    ].apply(
+        convertir_booleano
+    )
+
+    datos[
+        "solicita_visita"
+    ] = datos[
+        "solicita_visita"
+    ].apply(
+        convertir_booleano
     )
 
     conexion = obtener_conexion()
@@ -777,13 +885,20 @@ def guardar_extracciones_ia(df):
         )
     """
 
-    registros = [
-        tuple(fila)
-        for fila in datos.itertuples(
-            index=False,
-            name=None
+    registros = []
+
+    for _, fila in datos.iterrows():
+
+        registro = tuple(
+            limpiar_valor(
+                valor
+            )
+            for valor in fila
         )
-    ]
+
+        registros.append(
+            registro
+        )
 
     cursor.executemany(
         sql,
@@ -831,7 +946,7 @@ def cargar_extracciones_ia():
 
 
 # ============================================================
-# PRUEBA
+# PRUEBA DIRECTA
 # ============================================================
 
 if __name__ == "__main__":
