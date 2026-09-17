@@ -6,21 +6,15 @@ import pandas as pd
 import streamlit as st
 
 # ============================================================
-# DIAGNÓSTICO DE CONEXIÓN
+# CONFIGURACIÓN DE SUPABASE
 # ============================================================
 
 try:
-    secrets_disponibles = list(st.secrets.keys())
+    if "DATABASE_URL" in st.secrets:
+        os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
 except Exception:
-    secrets_disponibles = []
-
-st.write("DIAGNÓSTICO")
-st.write("Secrets disponibles:", secrets_disponibles)
-st.write(
-    "DATABASE_URL configurada:",
-    "DATABASE_URL" in secrets_disponibles
-)
-
+    pass
+    
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
