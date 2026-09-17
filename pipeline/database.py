@@ -120,10 +120,14 @@ def guardar_leads(df):
     )
 
     conexion.close()
+
+
 def guardar_extracciones_ia(df):
     """
-    Guarda únicamente las conversaciones que
-    realmente fueron procesadas por IA.
+    Guarda las extracciones realizadas por IA.
+
+    Si el lead ya existe, actualiza su información.
+    Si no existe, crea un nuevo registro.
     """
 
     conexion = obtener_conexion()
@@ -145,10 +149,14 @@ def guardar_extracciones_ia(df):
 
     datos = df.copy()
 
-    # Solo guardar registros que realmente fueron procesados por IA
+    # Solo guardar registros realmente procesados por IA
     datos = datos[
         datos["confianza_extraccion"].notna()
     ].copy()
+
+    if datos.empty:
+        conexion.close()
+        return
 
     for columna in columnas:
         if columna not in datos.columns:
@@ -168,16 +176,58 @@ def guardar_extracciones_ia(df):
         else x
     )
 
-    datos.to_sql(
-        "extracciones_ia",
-        conexion,
-        if_exists="replace",
-        index=False
+    cursor = conexion.cursor()
+
+    sql = """
+        INSERT INTO extracciones_ia (
+            lead_id,
+            modelo_conversacion,
+            modelos_alternativos,
+            presupuesto,
+            cuota_inicial,
+            forma_pago,
+            intencion_compra,
+            objecion_principal,
+            solicita_cotizacion,
+            solicita_visita,
+            resumen_conversacion,
+            confianza_extraccion
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(lead_id)
+        DO UPDATE SET
+            modelo_conversacion = excluded.modelo_conversacion,
+            modelos_alternativos = excluded.modelos_alternativos,
+            presupuesto = excluded.presupuesto,
+            cuota_inicial = excluded.cuota_inicial,
+            forma_pago = excluded.forma_pago,
+            intencion_compra = excluded.intencion_compra,
+            objecion_principal = excluded.objecion_principal,
+            solicita_cotizacion = excluded.solicita_cotizacion,
+            solicita_visita = excluded.solicita_visita,
+            resumen_conversacion = excluded.resumen_conversacion,
+            confianza_extraccion = excluded.confianza_extraccion
+    """
+
+    registros = [
+        tuple(fila)
+        for fila in datos.itertuples(
+            index=False,
+            name=None
+        )
+    ]
+
+    cursor.executemany(
+        sql,
+        registros
     )
 
+    conexion.commit()
     conexion.close()
 
+
 if __name__ == "__main__":
+
     crear_tablas()
 
     print("Base de datos creada correctamente")
