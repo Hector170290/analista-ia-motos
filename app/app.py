@@ -1,5 +1,4 @@
 import sys
-import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -17,10 +16,11 @@ st.set_page_config(
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / "data" / "motos.db"
 
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
+
+from pipeline.database import obtener_conexion
 
 
 # ============================================================
@@ -29,7 +29,7 @@ if str(BASE_DIR) not in sys.path:
 
 def cargar_datos():
 
-    conexion = sqlite3.connect(DB_PATH)
+    conexion = obtener_conexion()
 
     consulta = """
         SELECT
