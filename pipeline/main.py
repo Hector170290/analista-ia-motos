@@ -1,3 +1,5 @@
+import argparse
+
 from pipeline.ingestion import cargar_fuentes
 from pipeline.cleaning import limpiar_leads
 from pipeline.deduplication import (
@@ -9,9 +11,10 @@ from pipeline.conversations import (
     preparar_conversaciones,
     unir_conversaciones,
 )
+from pipeline.ai_extraction import enriquecer_conversaciones
 
 
-def ejecutar_pipeline():
+def ejecutar_pipeline(limite_ia=None):
     # 1. Cargar fuentes
     datos = cargar_fuentes()
 
@@ -35,17 +38,38 @@ def ejecutar_pipeline():
         datos["conversaciones"]
     )
 
-    # 7. Unir conversaciones con los leads
+    # 7. Unir conversaciones con leads
     leads = unir_conversaciones(
         leads,
         conversaciones
     )
 
+    # 8. Extraer información con IA
+    if limite_ia is not None:
+        leads = enriquecer_conversaciones(
+            leads,
+            limite=limite_ia
+        )
+
     return leads, datos
 
 
 if __name__ == "__main__":
-    resultado, datos = ejecutar_pipeline()
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--ia",
+        type=int,
+        default=None,
+        help="Cantidad de conversaciones a procesar con IA"
+    )
+
+    args = parser.parse_args()
+
+    resultado, datos = ejecutar_pipeline(
+        limite_ia=args.ia
+    )
 
     print("Pipeline ejecutado correctamente")
     print()
@@ -60,5 +84,12 @@ if __name__ == "__main__":
         "Leads sin conversación:",
         resultado["texto_conversacion"].isna().sum()
     )
+
+    if args.ia is not None:
+        print(
+            "Conversaciones procesadas con IA:",
+            args.ia
+        )
+
     print()
     print(resultado["estado_oportunidad"].value_counts())
