@@ -1,5 +1,6 @@
 streamlit
 pandas
-psycopg[binary]
+psycopg
+psycopg-binary
 python-dotenv
 openai
