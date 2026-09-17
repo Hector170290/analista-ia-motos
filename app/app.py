@@ -5,6 +5,21 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# ============================================================
+# DIAGNÓSTICO DE CONEXIÓN
+# ============================================================
+
+try:
+    secrets_disponibles = list(st.secrets.keys())
+except Exception:
+    secrets_disponibles = []
+
+st.write("DIAGNÓSTICO")
+st.write("Secrets disponibles:", secrets_disponibles)
+st.write(
+    "DATABASE_URL configurada:",
+    "DATABASE_URL" in secrets_disponibles
+)
 
 # ============================================================
 # CONFIGURACIÓN
