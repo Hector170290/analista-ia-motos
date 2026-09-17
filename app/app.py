@@ -14,7 +14,7 @@ try:
         os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
 except Exception:
     pass
-    
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -42,6 +42,17 @@ if str(BASE_DIR) not in sys.path:
 
 from pipeline.database import obtener_conexion
 
+from pipeline.database import obtener_database_url, usa_postgresql
+
+st.write("PRUEBA CONEXIÓN")
+st.write("DATABASE_URL detectada:", bool(obtener_database_url()))
+st.write("Usando PostgreSQL:", usa_postgresql())
+
+from pipeline.database import obtener_database_url, usa_postgresql
+
+st.write("PRUEBA CONEXIÓN")
+st.write("DATABASE_URL detectada:", bool(obtener_database_url()))
+st.write("Usando PostgreSQL:", usa_postgresql())
 
 # ============================================================
 # TÍTULO
@@ -57,6 +68,34 @@ st.caption(
 # ============================================================
 # CARGAR DATOS
 # ============================================================
+
+# PRUEBA TEMPORAL DE BASE DE DATOS
+
+try:
+    conexion_prueba = obtener_conexion()
+    cursor_prueba = conexion_prueba.cursor()
+
+    cursor_prueba.execute(
+        "SELECT current_database(), current_schema()"
+    )
+
+    base, esquema = cursor_prueba.fetchone()
+
+    cursor_prueba.execute(
+        "SELECT COUNT(*) FROM public.leads"
+    )
+
+    cantidad_leads = cursor_prueba.fetchone()[0]
+
+    cursor_prueba.close()
+    conexion_prueba.close()
+
+    st.write("BASE DE DATOS:", base)
+    st.write("SCHEMA:", esquema)
+    st.write("LEADS EN PUBLIC.LEADS:", cantidad_leads)
+
+except Exception as error:
+    st.error(f"PRUEBA DE CONEXIÓN FALLÓ: {error}")
 
 def cargar_datos():
 
