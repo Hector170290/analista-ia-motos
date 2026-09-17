@@ -1,3 +1,6 @@
-pandas
 streamlit
+pandas
+psycopg
+psycopg-binary
+python-dotenv
 openai
