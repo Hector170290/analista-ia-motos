@@ -5,24 +5,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-# ============================================================
-# CONFIGURACIÓN DE SUPABASE
-# ============================================================
-
-try:
-    if "DATABASE_URL" in st.secrets:
-        os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
-except Exception:
-    pass
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
 st.set_page_config(
-    page_title="Analista IA - Motos",
+    page_title="Analista IA - Gestión de Leads",
     page_icon="🏍️",
-    layout="wide"
+    layout="wide",
 )
 
 
@@ -33,69 +24,29 @@ st.set_page_config(
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+    sys.path.append(str(BASE_DIR))
 
 
 # ============================================================
-# BASE DE DATOS
+# CONEXIÓN A BASE DE DATOS
 # ============================================================
+
+# En Streamlit Cloud la conexión llega desde Secrets.
+# En local puede llegar desde la variable de entorno.
+
+try:
+    if "DATABASE_URL" in st.secrets:
+        os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
+except Exception:
+    pass
+
 
 from pipeline.database import obtener_conexion
-
-from pipeline.database import obtener_database_url, usa_postgresql
-
-st.write("PRUEBA CONEXIÓN")
-st.write("DATABASE_URL detectada:", bool(obtener_database_url()))
-st.write("Usando PostgreSQL:", usa_postgresql())
-
-from pipeline.database import obtener_database_url, usa_postgresql
-
-st.write("PRUEBA CONEXIÓN")
-st.write("DATABASE_URL detectada:", bool(obtener_database_url()))
-st.write("Usando PostgreSQL:", usa_postgresql())
-
-# ============================================================
-# TÍTULO
-# ============================================================
-
-st.title("🏍️ Analista IA - Gestión de Leads")
-
-st.caption(
-    "Priorización y gestión comercial de leads de motocicletas"
-)
 
 
 # ============================================================
 # CARGAR DATOS
 # ============================================================
-
-# PRUEBA TEMPORAL DE BASE DE DATOS
-
-try:
-    conexion_prueba = obtener_conexion()
-    cursor_prueba = conexion_prueba.cursor()
-
-    cursor_prueba.execute(
-        "SELECT current_database(), current_schema()"
-    )
-
-    base, esquema = cursor_prueba.fetchone()
-
-    cursor_prueba.execute(
-        "SELECT COUNT(*) FROM public.leads"
-    )
-
-    cantidad_leads = cursor_prueba.fetchone()[0]
-
-    cursor_prueba.close()
-    conexion_prueba.close()
-
-    st.write("BASE DE DATOS:", base)
-    st.write("SCHEMA:", esquema)
-    st.write("LEADS EN PUBLIC.LEADS:", cantidad_leads)
-
-except Exception as error:
-    st.error(f"PRUEBA DE CONEXIÓN FALLÓ: {error}")
 
 def cargar_datos():
 
@@ -120,33 +71,89 @@ def cargar_datos():
             ON l.lead_id = e.lead_id
     """
 
-    try:
+    df = pd.read_sql_query(
+        consulta,
+        conexion
+    )
 
-        df = pd.read_sql_query(
-            consulta,
-            conexion
+    conexion.close()
+
+
+    # ========================================================
+    # NORMALIZAR CAMPOS PARA EL DASHBOARD
+    # ========================================================
+
+    if "canal" in df.columns:
+
+        df["canal"] = (
+            df["canal"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
         )
 
-    finally:
 
-        conexion.close()
+    if "ciudad" in df.columns:
+
+        df["ciudad"] = (
+            df["ciudad"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+
+    if "empresa_id" in df.columns:
+
+        df["empresa_id"] = (
+            df["empresa_id"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+
+    if "punto_venta_id" in df.columns:
+
+        df["punto_venta_id"] = (
+            df["punto_venta_id"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+
+    if "asesor_nombre" in df.columns:
+
+        df["asesor_nombre"] = (
+            df["asesor_nombre"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
 
     return df
 
 
 # ============================================================
-# REGLAS DE PRIORIZACIÓN
+# PRIORIDAD
 # ============================================================
 
 def calcular_prioridad(fila):
 
-    modelo = fila.get(
-        "modelo_homologado"
-    )
+    # Si no existe un modelo homologado,
+    # primero se necesita completar la información.
 
-    if pd.isna(modelo) or not str(modelo).strip():
-
+    if pd.isna(
+        fila.get("modelo_homologado")
+    ):
         return "PENDIENTE_MODELO"
+
 
     intencion = fila.get(
         "intencion_compra"
@@ -168,97 +175,50 @@ def calcular_prioridad(fila):
         "cuota_inicial"
     )
 
-    # --------------------------------------------------------
-    # Normalizar valores
-    # --------------------------------------------------------
 
-    if isinstance(intencion, str):
-
-        intencion = (
-            intencion
-            .strip()
-            .lower()
-        )
-
-    if isinstance(forma_pago, str):
-
-        forma_pago = (
-            forma_pago
-            .strip()
-            .lower()
-        )
-
-    # --------------------------------------------------------
-    # Convertir booleanos
-    # --------------------------------------------------------
-
-    if isinstance(cotizacion, str):
-
-        cotizacion = (
-            cotizacion
-            .strip()
-            .lower()
-            in ["true", "1", "si", "sí", "yes"]
-        )
-
-    if isinstance(visita, str):
-
-        visita = (
-            visita
-            .strip()
-            .lower()
-            in ["true", "1", "si", "sí", "yes"]
-        )
-
-    # --------------------------------------------------------
-    # PRIORIDAD ALTA
-    # --------------------------------------------------------
+    # Señales de alta intención
 
     if intencion == "alta":
-
         return "ALTA"
 
-    if cotizacion is True:
 
+    if cotizacion is True or cotizacion == 1:
         return "ALTA"
 
-    if visita is True:
 
+    if visita is True or visita == 1:
         return "ALTA"
 
-    # --------------------------------------------------------
-    # PRIORIDAD MEDIA
-    # --------------------------------------------------------
+
+    # Señales de intención media
 
     if intencion == "media":
-
         return "MEDIA"
+
 
     if forma_pago in [
         "contado",
         "financiado"
     ]:
-
         return "MEDIA"
 
-    if pd.notna(cuota_inicial):
 
+    if pd.notna(
+        cuota_inicial
+    ):
         return "MEDIA"
 
-    # --------------------------------------------------------
-    # PRIORIDAD BAJA
-    # --------------------------------------------------------
 
     return "BAJA"
 
 
 # ============================================================
-# CARGAR INFORMACIÓN
+# CARGA PRINCIPAL
 # ============================================================
 
 try:
 
-    df = cargar_datos()
+    leads = cargar_datos()
 
 except Exception as error:
 
@@ -270,247 +230,315 @@ except Exception as error:
 
 
 # ============================================================
-# VALIDACIÓN
+# CALCULAR PRIORIDAD
 # ============================================================
 
-if df.empty:
-
-    st.warning(
-        "La base de datos no contiene leads."
-    )
-
-    st.stop()
-
-
-# ============================================================
-# NORMALIZACIÓN PARA DASHBOARD
-# ============================================================
-
-for columna in [
-    "canal",
-    "ciudad",
-    "empresa_id",
-    "punto_venta_id",
-    "asesor_nombre",
-    "prioridad",
-]:
-
-    if columna in df.columns:
-
-        df[columna] = (
-            df[columna]
-            .fillna("NO_INFORMADO")
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
-
-
-# ============================================================
-# PRIORIDAD
-# ============================================================
-
-df["prioridad"] = df.apply(
+leads["prioridad"] = leads.apply(
     calcular_prioridad,
     axis=1
 )
 
 
 # ============================================================
-# MÉTRICAS GENERALES
+# FECHA DE GESTIÓN
 # ============================================================
 
-total_leads = len(df)
+if "fecha_registro_normalizada" in leads.columns:
 
-total_clientes = (
-    df["cliente_id"]
-    .nunique()
-    if "cliente_id" in df.columns
-    else 0
-)
-
-total_oportunidades = (
-    df["oportunidad_id"]
-    .nunique()
-    if "oportunidad_id" in df.columns
-    else 0
-)
-
-if "tiene_conversacion" in df.columns:
-
-    tiene_conversacion = (
-        df["tiene_conversacion"]
-        .fillna(False)
-        .astype(bool)
-        .sum()
-    )
+    leads["fecha_gestion"] = pd.to_datetime(
+        leads["fecha_registro_normalizada"],
+        errors="coerce"
+    ).dt.date
 
 else:
 
-    tiene_conversacion = 0
+    leads["fecha_gestion"] = pd.NaT
 
 
-procesados_ia = (
-    df["confianza_extraccion"]
-    .notna()
-    .sum()
-    if "confianza_extraccion" in df.columns
-    else 0
+# ============================================================
+# ENCABEZADO
+# ============================================================
+
+st.title(
+    "🏍️ Analista IA - Gestión de Leads"
+)
+
+st.write(
+    "Priorización y gestión comercial de leads de motocicletas"
 )
 
 
 # ============================================================
-# KPIs
+# RESUMEN COMERCIAL
 # ============================================================
 
+total_leads = len(
+    leads
+)
+
+
+total_clientes = (
+    leads["cliente_id"]
+    .nunique()
+)
+
+
+total_oportunidades = (
+    leads["oportunidad_id"]
+    .nunique()
+)
+
+
+leads_con_conversacion = int(
+    leads["tiene_conversacion"]
+    .fillna(0)
+    .sum()
+)
+
+
+leads_procesados_ia = int(
+    leads["confianza_extraccion"]
+    .notna()
+    .sum()
+)
+
+
 col1, col2, col3, col4, col5 = st.columns(5)
+
 
 with col1:
 
     st.metric(
         "Leads",
-        f"{total_leads:,}"
+        total_leads
     )
+
 
 with col2:
 
     st.metric(
         "Clientes",
-        f"{total_clientes:,}"
+        total_clientes
     )
+
 
 with col3:
 
     st.metric(
         "Oportunidades",
-        f"{total_oportunidades:,}"
+        total_oportunidades
     )
+
 
 with col4:
 
     st.metric(
         "Con conversación",
-        f"{tiene_conversacion:,}"
+        leads_con_conversacion
     )
+
 
 with col5:
 
     st.metric(
         "Procesados con IA",
-        f"{procesados_ia:,}"
+        leads_procesados_ia
     )
 
 
-st.divider()
+# ============================================================
+# PRIORIDADES
+# ============================================================
+
+st.subheader(
+    "Prioridad de gestión"
+)
+
+
+prioridades = (
+    leads["prioridad"]
+    .value_counts()
+    .reindex(
+        [
+            "ALTA",
+            "MEDIA",
+            "BAJA",
+            "PENDIENTE_MODELO",
+        ],
+        fill_value=0,
+    )
+)
+
+
+col1, col2, col3, col4 = st.columns(4)
+
+
+with col1:
+
+    st.metric(
+        "🔴 Alta",
+        int(
+            prioridades["ALTA"]
+        )
+    )
+
+
+with col2:
+
+    st.metric(
+        "🟡 Media",
+        int(
+            prioridades["MEDIA"]
+        )
+    )
+
+
+with col3:
+
+    st.metric(
+        "🟢 Baja",
+        int(
+            prioridades["BAJA"]
+        )
+    )
+
+
+with col4:
+
+    st.metric(
+        "⚪ Pendiente modelo",
+        int(
+            prioridades["PENDIENTE_MODELO"]
+        )
+    )
 
 
 # ============================================================
 # FILTROS
 # ============================================================
 
-st.subheader("Filtros de gestión")
+st.subheader(
+    "Filtros de gestión"
+)
 
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # EMPRESA
-# ------------------------------------------------------------
+# ============================================================
 
 with col1:
 
-    empresas = sorted(
-        df["empresa_id"]
+    empresas = [
+        "Todas"
+    ] + sorted(
+        leads["empresa_id"]
         .dropna()
+        .astype(str)
+        .str.strip()
         .unique()
         .tolist()
     )
 
-    empresas_filtro = st.multiselect(
+
+    empresa_seleccionada = st.selectbox(
         "Empresa",
-        options=empresas,
-        default=empresas
+        empresas
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # PUNTO DE VENTA
-# ------------------------------------------------------------
+# ============================================================
 
 with col2:
 
-    puntos = sorted(
-        df["punto_venta_id"]
+    puntos = [
+        "Todos"
+    ] + sorted(
+        leads["punto_venta_id"]
         .dropna()
+        .astype(str)
+        .str.strip()
         .unique()
         .tolist()
     )
 
-    puntos_filtro = st.multiselect(
+
+    punto_seleccionado = st.selectbox(
         "Punto de venta",
-        options=puntos,
-        default=puntos
+        puntos
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # ASESOR
-# ------------------------------------------------------------
+# ============================================================
 
 with col3:
 
-    asesores = sorted(
-        df["asesor_nombre"]
+    asesores = [
+        "Todos"
+    ] + sorted(
+        leads["asesor_nombre"]
         .dropna()
+        .astype(str)
+        .str.strip()
         .unique()
         .tolist()
     )
 
-    asesores_filtro = st.multiselect(
+
+    asesor_seleccionado = st.selectbox(
         "Asesor",
-        options=asesores,
-        default=asesores
+        asesores
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # PRIORIDAD
-# ------------------------------------------------------------
+# ============================================================
 
 with col4:
 
-    prioridades = [
+    prioridades_filtro = [
+        "Todas",
         "ALTA",
         "MEDIA",
         "BAJA",
-        "PENDIENTE_MODELO"
+        "PENDIENTE_MODELO",
     ]
 
-    prioridades_filtro = st.multiselect(
+
+    prioridad_seleccionada = st.selectbox(
         "Prioridad",
-        options=prioridades,
-        default=prioridades
+        prioridades_filtro
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # CANAL
-# ------------------------------------------------------------
+# ============================================================
 
 with col5:
 
-    canales = sorted(
-        df["canal"]
+    canales = [
+        "Todos"
+    ] + sorted(
+        leads["canal"]
         .dropna()
+        .astype(str)
+        .str.strip()
         .unique()
         .tolist()
     )
 
-    canales_filtro = st.multiselect(
+
+    canal_seleccionado = st.selectbox(
         "Canal",
-        options=canales,
-        default=canales
+        canales
     )
 
 
@@ -518,649 +546,239 @@ with col5:
 # APLICAR FILTROS
 # ============================================================
 
-df_filtrado = df.copy()
+leads_filtrados = leads.copy()
 
 
-if empresas_filtro:
+if empresa_seleccionada != "Todas":
 
-    df_filtrado = df_filtrado[
-        df_filtrado["empresa_id"].isin(
-            empresas_filtro
-        )
+    leads_filtrados = leads_filtrados[
+        leads_filtrados["empresa_id"]
+        .astype(str)
+        .str.strip()
+        == empresa_seleccionada
     ]
 
 
-if puntos_filtro:
+if punto_seleccionado != "Todos":
 
-    df_filtrado = df_filtrado[
-        df_filtrado["punto_venta_id"].isin(
-            puntos_filtro
-        )
+    leads_filtrados = leads_filtrados[
+        leads_filtrados["punto_venta_id"]
+        .astype(str)
+        .str.strip()
+        == punto_seleccionado
     ]
 
 
-if asesores_filtro:
+if asesor_seleccionado != "Todos":
 
-    df_filtrado = df_filtrado[
-        df_filtrado["asesor_nombre"].isin(
-            asesores_filtro
-        )
+    leads_filtrados = leads_filtrados[
+        leads_filtrados["asesor_nombre"]
+        .astype(str)
+        .str.strip()
+        == asesor_seleccionado
     ]
 
 
-if prioridades_filtro:
+if prioridad_seleccionada != "Todas":
 
-    df_filtrado = df_filtrado[
-        df_filtrado["prioridad"].isin(
-            prioridades_filtro
-        )
+    leads_filtrados = leads_filtrados[
+        leads_filtrados["prioridad"]
+        == prioridad_seleccionada
     ]
 
 
-if canales_filtro:
+if canal_seleccionado != "Todos":
 
-    df_filtrado = df_filtrado[
-        df_filtrado["canal"].isin(
-            canales_filtro
-        )
+    leads_filtrados = leads_filtrados[
+        leads_filtrados["canal"]
+        == canal_seleccionado
     ]
 
 
 # ============================================================
-# RESUMEN DE PRIORIDADES
+# ORDEN DE PRIORIDAD
 # ============================================================
 
-st.subheader("Distribución de prioridades")
+orden_prioridad = {
+
+    "ALTA": 1,
+
+    "MEDIA": 2,
+
+    "BAJA": 3,
+
+    "PENDIENTE_MODELO": 4,
+}
 
 
-prioridades_resumen = (
-    df_filtrado["prioridad"]
-    .value_counts()
-    .reindex(
-        [
-            "ALTA",
-            "MEDIA",
-            "BAJA",
-            "PENDIENTE_MODELO"
-        ],
-        fill_value=0
-    )
+leads_filtrados["orden_prioridad"] = (
+    leads_filtrados["prioridad"]
+    .map(orden_prioridad)
 )
 
 
-c1, c2, c3, c4 = st.columns(4)
+leads_filtrados = leads_filtrados.sort_values(
 
+    by=[
+        "orden_prioridad",
+        "fecha_gestion",
+    ],
 
-with c1:
+    ascending=[
+        True,
+        False,
+    ],
 
-    st.metric(
-        "🔴 Alta",
-        int(
-            prioridades_resumen["ALTA"]
-        )
-    )
-
-
-with c2:
-
-    st.metric(
-        "🟠 Media",
-        int(
-            prioridades_resumen["MEDIA"]
-        )
-    )
-
-
-with c3:
-
-    st.metric(
-        "🟡 Baja",
-        int(
-            prioridades_resumen["BAJA"]
-        )
-    )
-
-
-with c4:
-
-    st.metric(
-        "⚪ Pendiente modelo",
-        int(
-            prioridades_resumen[
-                "PENDIENTE_MODELO"
-            ]
-        )
-    )
-
-
-st.divider()
+    na_position="last"
+)
 
 
 # ============================================================
-# LISTA DE GESTIÓN
+# RESULTADO
 # ============================================================
 
 st.subheader(
-    "📋 Leads priorizados para gestión"
-)
-
-
-# ------------------------------------------------------------
-# ORDEN
-# ------------------------------------------------------------
-
-orden_prioridad = {
-    "ALTA": 1,
-    "MEDIA": 2,
-    "BAJA": 3,
-    "PENDIENTE_MODELO": 4
-}
-
-
-df_filtrado["_orden_prioridad"] = (
-    df_filtrado["prioridad"]
-    .map(orden_prioridad)
-    .fillna(99)
-)
-
-
-if "fecha_registro_normalizada" in df_filtrado.columns:
-
-    df_filtrado[
-        "_fecha_orden"
-    ] = pd.to_datetime(
-        df_filtrado[
-            "fecha_registro_normalizada"
-        ],
-        errors="coerce"
-    )
-
-else:
-
-    df_filtrado["_fecha_orden"] = pd.NaT
-
-
-df_filtrado = (
-    df_filtrado
-    .sort_values(
-        by=[
-            "_orden_prioridad",
-            "_fecha_orden"
-        ],
-        ascending=[
-            True,
-            True
-        ],
-        na_position="last"
-    )
+    f"🔥 Lista priorizada de gestión "
+    f"({len(leads_filtrados)} leads)"
 )
 
 
 # ============================================================
-# TABLA PRINCIPAL
+# TABLA DE GESTIÓN
 # ============================================================
 
-columnas_tabla = [
-    "lead_id",
-    "cliente_id",
-    "oportunidad_id",
-    "fecha_registro",
-    "canal",
-    "empresa_id",
-    "punto_venta_id",
-    "nombre_cliente",
-    "telefono",
-    "ciudad",
-    "modelo_interes_texto",
-    "modelo_homologado",
-    "modelo_conversacion",
-    "intencion_compra",
-    "forma_pago",
-    "cuota_inicial",
-    "solicita_cotizacion",
-    "solicita_visita",
-    "objecion_principal",
+columnas_gestion = [
+
     "prioridad",
+
+    "lead_id",
+
+    "nombre_cliente",
+
+    "telefono",
+
+    "ciudad",
+
+    "empresa_id",
+
+    "punto_venta_id",
+
     "asesor_nombre",
-    "estado_asignacion",
+
+    "fecha_gestion",
+
+    "modelo_homologado",
+
+    "modelo_conversacion",
+
+    "intencion_compra",
+
+    "forma_pago",
+
+    "presupuesto",
+
+    "cuota_inicial",
+
+    "objecion_principal",
+
+    "solicita_cotizacion",
+
+    "solicita_visita",
+
+    "resumen_conversacion",
 ]
 
 
-columnas_disponibles = [
+columnas_gestion = [
+
     columna
-    for columna in columnas_tabla
-    if columna in df_filtrado.columns
+
+    for columna in columnas_gestion
+
+    if columna in leads_filtrados.columns
 ]
 
-
-tabla = df_filtrado[
-    columnas_disponibles
-].copy()
-
-
-# ============================================================
-# NOMBRES MÁS AMIGABLES
-# ============================================================
-
-renombrar = {
-
-    "lead_id": "Lead",
-
-    "cliente_id": "Cliente",
-
-    "oportunidad_id": "Oportunidad",
-
-    "fecha_registro": "Fecha registro",
-
-    "canal": "Canal",
-
-    "empresa_id": "Empresa",
-
-    "punto_venta_id": "Punto venta",
-
-    "nombre_cliente": "Cliente nombre",
-
-    "telefono": "Teléfono",
-
-    "ciudad": "Ciudad",
-
-    "modelo_interes_texto": "Modelo informado",
-
-    "modelo_homologado": "Modelo homologado",
-
-    "modelo_conversacion": "Modelo conversación",
-
-    "intencion_compra": "Intención",
-
-    "forma_pago": "Forma de pago",
-
-    "cuota_inicial": "Cuota inicial",
-
-    "solicita_cotizacion": "Solicita cotización",
-
-    "solicita_visita": "Solicita visita",
-
-    "objecion_principal": "Objeción",
-
-    "prioridad": "Prioridad",
-
-    "asesor_nombre": "Asesor",
-
-    "estado_asignacion": "Asignación",
-}
-
-
-tabla = tabla.rename(
-    columns=renombrar
-)
-
-
-# ============================================================
-# MOSTRAR TABLA
-# ============================================================
 
 st.dataframe(
-    tabla,
-    use_container_width=True,
+
+    leads_filtrados[
+        columnas_gestion
+    ],
+
+    width="stretch",
+
     hide_index=True
 )
 
 
-st.caption(
-    f"Mostrando {len(tabla):,} leads de {total_leads:,} registros."
-)
-
-
 # ============================================================
-# INFORMACIÓN DE CALIDAD
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "🔎 Información de calidad de los datos"
-)
-
-
-# ------------------------------------------------------------
-# MODELOS
-# ------------------------------------------------------------
-
-if "estado_modelo" in df_filtrado.columns:
-
-    modelos_no_identificados = (
-        df_filtrado[
-            df_filtrado[
-                "estado_modelo"
-            ] != "HOMOLOGADO"
-        ]
-        .shape[0]
-    )
-
-else:
-
-    modelos_no_identificados = 0
-
-
-# ------------------------------------------------------------
-# CONVERSACIONES
-# ------------------------------------------------------------
-
-leads_sin_conversacion = (
-    total_leads
-    - tiene_conversacion
-)
-
-
-# ------------------------------------------------------------
-# ASIGNACIÓN
-# ------------------------------------------------------------
-
-if "estado_asignacion" in df_filtrado.columns:
-
-    sin_asignar = (
-        df_filtrado[
-            df_filtrado[
-                "estado_asignacion"
-            ]
-            != "ASIGNADO"
-        ]
-        .shape[0]
-    )
-
-else:
-
-    sin_asignar = 0
-
-
-q1, q2, q3 = st.columns(3)
-
-
-with q1:
-
-    st.metric(
-        "Modelo no identificado",
-        f"{modelos_no_identificados:,}"
-    )
-
-
-with q2:
-
-    st.metric(
-        "Leads sin conversación",
-        f"{leads_sin_conversacion:,}"
-    )
-
-
-with q3:
-
-    st.metric(
-        "Leads sin asignar",
-        f"{sin_asignar:,}"
-    )
-
-
-# ============================================================
-# CALIDAD POR ASESOR
+# CALIDAD DE INFORMACIÓN
 # ============================================================
 
 st.subheader(
-    "Calidad de información por asesor"
+    "Calidad de información"
 )
 
 
-if (
-    "asesor_nombre" in df_filtrado.columns
-    and "estado_modelo" in df_filtrado.columns
-):
+con_modelo = int(
 
-    calidad_asesor = (
-        df_filtrado
-        .assign(
-            modelo_incompleto=
-            df_filtrado[
-                "estado_modelo"
-            ]
-            != "HOMOLOGADO"
-        )
-        .groupby(
-            "asesor_nombre",
-            dropna=False
-        )
-        .agg(
-            leads=(
-                "lead_id",
-                "count"
-            ),
-            modelos_incompletos=(
-                "modelo_incompleto",
-                "sum"
-            )
-        )
-        .reset_index()
-    )
-
-    calidad_asesor[
-        "incidencia_modelo_%"
-    ] = (
-        calidad_asesor[
-            "modelos_incompletos"
+    (
+        leads_filtrados[
+            "estado_modelo"
         ]
-        / calidad_asesor["leads"]
-        * 100
-    ).round(1)
-
-    calidad_asesor = (
-        calidad_asesor
-        .sort_values(
-            "incidencia_modelo_%",
-            ascending=False
-        )
-    )
-
-    calidad_asesor = calidad_asesor.rename(
-        columns={
-            "asesor_nombre": "Asesor",
-            "leads": "Leads",
-            "modelos_incompletos":
-                "Modelos incompletos",
-            "incidencia_modelo_%":
-                "Incidencia modelo (%)"
-        }
-    )
-
-    st.dataframe(
-        calidad_asesor,
-        use_container_width=True,
-        hide_index=True
-    )
-
-else:
-
-    st.info(
-        "No hay información suficiente para calcular "
-        "la calidad por asesor."
-    )
-
-
-# ============================================================
-# DETALLE DE UN LEAD
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "🔍 Detalle de lead"
+        == "HOMOLOGADO"
+    ).sum()
 )
 
 
-if not df_filtrado.empty:
+sin_modelo = int(
 
-    leads_disponibles = (
-        df_filtrado[
-            "lead_id"
+    (
+        leads_filtrados[
+            "estado_modelo"
         ]
-        .astype(str)
-        .tolist()
-    )
-
-    lead_seleccionado = st.selectbox(
-        "Seleccione un lead",
-        options=leads_disponibles
-    )
-
-    detalle = df_filtrado[
-        df_filtrado[
-            "lead_id"
-        ].astype(str)
-        == str(lead_seleccionado)
-    ]
-
-    if not detalle.empty:
-
-        fila = detalle.iloc[0]
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-
-            st.write(
-                "**Lead:**",
-                fila.get(
-                    "lead_id",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Cliente:**",
-                fila.get(
-                    "nombre_cliente",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Teléfono:**",
-                fila.get(
-                    "telefono",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Ciudad:**",
-                fila.get(
-                    "ciudad",
-                    ""
-                )
-            )
-
-        with c2:
-
-            st.write(
-                "**Modelo informado:**",
-                fila.get(
-                    "modelo_interes_texto",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Modelo homologado:**",
-                fila.get(
-                    "modelo_homologado",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Modelo conversación:**",
-                fila.get(
-                    "modelo_conversacion",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Prioridad:**",
-                fila.get(
-                    "prioridad",
-                    ""
-                )
-            )
-
-        with c3:
-
-            st.write(
-                "**Intención:**",
-                fila.get(
-                    "intencion_compra",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Forma de pago:**",
-                fila.get(
-                    "forma_pago",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Cuota inicial:**",
-                fila.get(
-                    "cuota_inicial",
-                    ""
-                )
-            )
-
-            st.write(
-                "**Asesor:**",
-                fila.get(
-                    "asesor_nombre",
-                    ""
-                )
-            )
-
-        st.markdown(
-            "---"
-        )
-
-        st.write(
-            "**Objeción principal:**"
-        )
-
-        st.write(
-            fila.get(
-                "objecion_principal",
-                None
-            )
-            or "No identificada"
-        )
-
-        st.write(
-            "**Resumen de conversación:**"
-        )
-
-        st.write(
-            fila.get(
-                "resumen_conversacion",
-                None
-            )
-            or "No disponible"
-        )
-
-
-# ============================================================
-# LIMPIEZA INTERNA
-# ============================================================
-
-df_filtrado = df_filtrado.drop(
-    columns=[
-        "_orden_prioridad",
-        "_fecha_orden"
-    ],
-    errors="ignore"
+        != "HOMOLOGADO"
+    ).sum()
 )
+
+
+col1, col2, col3 = st.columns(3)
+
+
+with col1:
+
+    st.metric(
+        "Modelo homologado",
+        con_modelo
+    )
+
+
+with col2:
+
+    st.metric(
+        "Modelo pendiente/no identificado",
+        sin_modelo
+    )
+
+
+with col3:
+
+    if len(leads_filtrados) > 0:
+
+        porcentaje = (
+            con_modelo
+            / len(leads_filtrados)
+            * 100
+        )
+
+        st.metric(
+            "% con modelo homologado",
+            f"{porcentaje:.1f}%"
+        )
+
+    else:
+
+        st.metric(
+            "% con modelo homologado",
+            "0.0%"
+        )
