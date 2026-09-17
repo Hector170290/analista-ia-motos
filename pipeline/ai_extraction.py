@@ -3,6 +3,11 @@ import os
 
 from openai import OpenAI
 
+from pipeline.database import (
+    guardar_extracciones_ia,
+    obtener_conexion,
+)
+
 
 PROMPT_EXTRACCION = """
 Eres un analista comercial de una empresa comercializadora de motocicletas.
@@ -112,7 +117,9 @@ def extraer_informacion_conversacion(texto_conversacion):
 
     try:
         resultado = json.loads(contenido)
+
     except json.JSONDecodeError as error:
+
         raise ValueError(
             f"La IA no devolvió un JSON válido: {contenido}"
         ) from error
@@ -120,12 +127,35 @@ def extraer_informacion_conversacion(texto_conversacion):
     return resultado
 
 
+def obtener_leads_ya_procesados():
+    """
+    Obtiene los lead_id que ya tienen una extracción IA guardada.
+    """
+
+    conexion = obtener_conexion()
+
+    resultado = conexion.execute(
+        """
+        SELECT lead_id
+        FROM extracciones_ia
+        """
+    ).fetchall()
+
+    conexion.close()
+
+    return {
+        fila[0]
+        for fila in resultado
+    }
+
+
 def enriquecer_conversaciones(df, limite=None):
     """
-    Aplica extracción de IA a las conversaciones.
+    Aplica extracción de IA únicamente a conversaciones
+    que todavía no tengan resultado almacenado.
 
-    limite permite procesar una cantidad pequeña durante las pruebas.
-    Si es None, procesa todas las conversaciones.
+    Cada extracción se guarda inmediatamente en SQLite.
+    Esto permite reanudar el proceso si se interrumpe.
     """
 
     df = df.copy()
@@ -147,24 +177,80 @@ def enriquecer_conversaciones(df, limite=None):
     for columna in columnas_ia:
         df[columna] = None
 
+    # Obtener los leads que ya fueron procesados
+    leads_procesados = obtener_leads_ya_procesados()
+
+    # Seleccionar solamente leads con conversación
     indices = df[
         df["texto_conversacion"].notna()
-    ].index
+    ].index.tolist()
 
+    # Excluir los que ya tienen extracción
+    indices = [
+        indice
+        for indice in indices
+        if df.at[indice, "lead_id"] not in leads_procesados
+    ]
+
+    # Aplicar límite solamente a los pendientes
     if limite is not None:
         indices = indices[:limite]
 
-    for indice in indices:
+    total = len(indices)
+
+    print()
+    print(
+        f"Conversaciones pendientes de IA: {total}"
+    )
+    print()
+
+    for posicion, indice in enumerate(
+        indices,
+        start=1
+    ):
+
+        lead_id = df.at[
+            indice,
+            "lead_id"
+        ]
+
+        print(
+            f"Procesando {posicion}/{total} - {lead_id}"
+        )
 
         resultado = extraer_informacion_conversacion(
-            df.at[indice, "texto_conversacion"]
+            df.at[
+                indice,
+                "texto_conversacion"
+            ]
         )
 
         if resultado:
 
             for columna in columnas_ia:
-                df.at[indice, columna] = resultado.get(
+
+                df.at[
+                    indice,
+                    columna
+                ] = resultado.get(
                     columna
                 )
 
+            # Guardar inmediatamente en SQLite
+            fila_guardar = df.loc[
+                [indice],
+                [
+                    "lead_id",
+                    *columnas_ia
+                ]
+            ].copy()
+
+            guardar_extracciones_ia(
+                fila_guardar
+            )
+
+    print()
+    print("Procesamiento de IA finalizado.")
+
     return df
+    

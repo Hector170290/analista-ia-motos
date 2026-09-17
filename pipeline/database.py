@@ -2,16 +2,14 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pandas as pd
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "motos.db"
 
 
 def obtener_conexion():
-    """
-    Crea y devuelve una conexión a la base de datos SQLite.
-    """
-
     DB_PATH.parent.mkdir(
         parents=True,
         exist_ok=True
@@ -23,11 +21,8 @@ def obtener_conexion():
 
 
 def crear_tablas():
-    """
-    Crea las tablas principales del sistema.
-    """
-
     conexion = obtener_conexion()
+
     cursor = conexion.cursor()
 
     cursor.execute(
@@ -36,6 +31,8 @@ def crear_tablas():
             lead_id TEXT PRIMARY KEY,
             cliente_id TEXT,
             oportunidad_id TEXT,
+            fecha_registro TEXT,
+            fecha_registro_normalizada TEXT,
             fecha_primer_contacto TEXT,
             canal TEXT,
             empresa_id TEXT,
@@ -48,7 +45,11 @@ def crear_tablas():
             modelo_homologado TEXT,
             estado_modelo TEXT,
             estado_oportunidad TEXT,
-            tiene_conversacion INTEGER
+            tiene_conversacion INTEGER,
+            asesor_id TEXT,
+            asesor_nombre TEXT,
+            estado_asignacion TEXT,
+            prioridad TEXT
         )
         """
     )
@@ -75,20 +76,24 @@ def crear_tablas():
     )
 
     conexion.commit()
+
     conexion.close()
 
 
 def guardar_leads(df):
     """
-    Guarda los leads procesados en la tabla leads.
-    """
+    Guarda los leads en SQLite.
 
-    conexion = obtener_conexion()
+    Se utiliza DELETE + INSERT para conservar
+    la estructura y restricciones de la tabla.
+    """
 
     columnas = [
         "lead_id",
         "cliente_id",
         "oportunidad_id",
+        "fecha_registro",
+        "fecha_registro_normalizada",
         "fecha_primer_contacto",
         "canal",
         "empresa_id",
@@ -102,22 +107,75 @@ def guardar_leads(df):
         "estado_modelo",
         "estado_oportunidad",
         "tiene_conversacion",
+        "asesor_id",
+        "asesor_nombre",
+        "estado_asignacion",
+        "prioridad",
     ]
 
     datos = df.copy()
 
     for columna in columnas:
+
         if columna not in datos.columns:
+
             datos[columna] = None
 
     datos = datos[columnas]
 
-    datos.to_sql(
-        "leads",
-        conexion,
-        if_exists="replace",
-        index=False
+    # Convertir fechas datetime a texto
+    # para almacenarlas correctamente en SQLite.
+    for columna in [
+        "fecha_registro_normalizada"
+    ]:
+
+        if columna in datos.columns:
+
+            datos[columna] = datos[columna].apply(
+                lambda x: (
+                    x.isoformat()
+                    if hasattr(x, "isoformat")
+                    else x
+                )
+            )
+
+    conexion = obtener_conexion()
+
+    cursor = conexion.cursor()
+
+    # Reemplazar los registros existentes
+    # sin destruir la estructura de la tabla.
+    cursor.execute(
+        "DELETE FROM leads"
     )
+
+    placeholders = ",".join(
+        ["?"] * len(columnas)
+    )
+
+    sql = f"""
+        INSERT INTO leads (
+            {",".join(columnas)}
+        )
+        VALUES (
+            {placeholders}
+        )
+    """
+
+    registros = [
+        tuple(fila)
+        for fila in datos.itertuples(
+            index=False,
+            name=None
+        )
+    ]
+
+    cursor.executemany(
+        sql,
+        registros
+    )
+
+    conexion.commit()
 
     conexion.close()
 
@@ -125,12 +183,7 @@ def guardar_leads(df):
 def guardar_extracciones_ia(df):
     """
     Guarda las extracciones realizadas por IA.
-
-    Si el lead ya existe, actualiza su información.
-    Si no existe, crea un nuevo registro.
     """
-
-    conexion = obtener_conexion()
 
     columnas = [
         "lead_id",
@@ -149,34 +202,53 @@ def guardar_extracciones_ia(df):
 
     datos = df.copy()
 
-    # Solo guardar registros realmente procesados por IA
+    if "confianza_extraccion" not in datos.columns:
+        return
+
     datos = datos[
         datos["confianza_extraccion"].notna()
     ].copy()
 
     if datos.empty:
-        conexion.close()
         return
 
     for columna in columnas:
+
         if columna not in datos.columns:
             datos[columna] = None
 
     datos = datos[columnas]
 
-    # Convertir listas a JSON para SQLite
-    datos["modelos_alternativos"] = datos[
-        "modelos_alternativos"
-    ].apply(
-        lambda x: json.dumps(
-            x,
-            ensure_ascii=False
+    datos["modelos_alternativos"] = (
+        datos["modelos_alternativos"].apply(
+            lambda x: (
+                json.dumps(
+                    x,
+                    ensure_ascii=False
+                )
+                if isinstance(x, list)
+                else x
+            )
         )
-        if isinstance(x, list)
-        else x
     )
 
+    conexion = obtener_conexion()
+
     cursor = conexion.cursor()
+
+    lead_ids = datos["lead_id"].tolist()
+
+    placeholders = ",".join(
+        ["?"] * len(lead_ids)
+    )
+
+    cursor.execute(
+        f"""
+        DELETE FROM extracciones_ia
+        WHERE lead_id IN ({placeholders})
+        """,
+        lead_ids
+    )
 
     sql = """
         INSERT INTO extracciones_ia (
@@ -193,20 +265,9 @@ def guardar_extracciones_ia(df):
             resumen_conversacion,
             confianza_extraccion
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(lead_id)
-        DO UPDATE SET
-            modelo_conversacion = excluded.modelo_conversacion,
-            modelos_alternativos = excluded.modelos_alternativos,
-            presupuesto = excluded.presupuesto,
-            cuota_inicial = excluded.cuota_inicial,
-            forma_pago = excluded.forma_pago,
-            intencion_compra = excluded.intencion_compra,
-            objecion_principal = excluded.objecion_principal,
-            solicita_cotizacion = excluded.solicita_cotizacion,
-            solicita_visita = excluded.solicita_visita,
-            resumen_conversacion = excluded.resumen_conversacion,
-            confianza_extraccion = excluded.confianza_extraccion
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
     """
 
     registros = [
@@ -223,12 +284,52 @@ def guardar_extracciones_ia(df):
     )
 
     conexion.commit()
+
     conexion.close()
+
+
+def cargar_extracciones_ia():
+    """
+    Recupera las extracciones almacenadas.
+    """
+
+    conexion = obtener_conexion()
+
+    consulta = """
+        SELECT
+            lead_id,
+            modelo_conversacion,
+            modelos_alternativos,
+            presupuesto,
+            cuota_inicial,
+            forma_pago,
+            intencion_compra,
+            objecion_principal,
+            solicita_cotizacion,
+            solicita_visita,
+            resumen_conversacion,
+            confianza_extraccion
+        FROM extracciones_ia
+    """
+
+    datos = pd.read_sql_query(
+        consulta,
+        conexion
+    )
+
+    conexion.close()
+
+    return datos
 
 
 if __name__ == "__main__":
 
     crear_tablas()
 
-    print("Base de datos creada correctamente")
-    print(f"Ubicación: {DB_PATH}")
+    print(
+        "Base de datos creada correctamente"
+    )
+
+    print(
+        f"Ubicación: {DB_PATH}"
+    )

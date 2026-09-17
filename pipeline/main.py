@@ -13,6 +13,66 @@ from pipeline.conversations import (
 )
 from pipeline.ai_extraction import enriquecer_conversaciones
 from pipeline.prioritization import aplicar_priorizacion
+from pipeline.asesor_assignment import (
+    cargar_asesores,
+    asignar_asesores,
+)
+from pipeline.database import (
+    crear_tablas,
+    guardar_leads,
+    guardar_extracciones_ia,
+    cargar_extracciones_ia,
+)
+
+
+def integrar_extracciones_ia(leads, extracciones_ia):
+    """
+    Une las extracciones de IA almacenadas en la base
+    con el conjunto actual de leads.
+
+    No realiza nuevas llamadas a la API.
+    """
+
+    if extracciones_ia.empty:
+        return leads
+
+    columnas_ia = [
+        "modelo_conversacion",
+        "modelos_alternativos",
+        "presupuesto",
+        "cuota_inicial",
+        "forma_pago",
+        "intencion_compra",
+        "objecion_principal",
+        "solicita_cotizacion",
+        "solicita_visita",
+        "resumen_conversacion",
+        "confianza_extraccion",
+    ]
+
+    extracciones = extracciones_ia[
+        ["lead_id", *columnas_ia]
+    ].copy()
+
+    # Si alguna columna no existe, crearla
+    for columna in columnas_ia:
+
+        if columna not in leads.columns:
+            leads[columna] = None
+
+    # Eliminar columnas IA actuales antes del merge
+    leads = leads.drop(
+        columns=columnas_ia,
+        errors="ignore"
+    )
+
+    leads = leads.merge(
+        extracciones,
+        on="lead_id",
+        how="left"
+    )
+
+    return leads
 
 
 def ejecutar_pipeline(limite_ia=None):
@@ -21,44 +81,91 @@ def ejecutar_pipeline(limite_ia=None):
 
     Flujo:
     1. Carga de fuentes
-    2. Eliminación de duplicados de lead
+    2. Eliminación de duplicados
     3. Limpieza y normalización
     4. Identificación de clientes
     5. Identificación de oportunidades
     6. Integración de conversaciones
-    7. Extracción de información con IA
-    8. Priorización comercial
+    7. Extracción de IA nueva, si corresponde
+    8. Recuperación de IA existente
+    9. Priorización
+    10. Asignación de asesores
+    11. Persistencia
     """
 
-    # 1. Cargar fuentes
+    # ========================================================
+    # 1. CREAR TABLAS
+    # ========================================================
+
+    crear_tablas()
+
+    # ========================================================
+    # 2. CARGAR FUENTES
+    # ========================================================
+
     datos = cargar_fuentes()
 
     leads = datos["leads"]
     catalogo = datos["catalogo_motos"]
 
-    # 2. Eliminar duplicados exactos de lead
-    leads = eliminar_duplicados_lead(leads)
+    # ========================================================
+    # 3. ELIMINAR DUPLICADOS EXACTOS
+    # ========================================================
 
-    # 3. Limpiar y normalizar leads
-    leads = limpiar_leads(leads, catalogo)
+    leads = eliminar_duplicados_lead(
+        leads
+    )
 
-    # 4. Identificar clientes
-    leads = identificar_clientes(leads)
+    # ========================================================
+    # 4. LIMPIAR Y NORMALIZAR
+    # ========================================================
 
-    # 5. Asignar oportunidades
-    leads = asignar_oportunidades(leads)
+    leads = limpiar_leads(
+        leads,
+        catalogo
+    )
 
-    # 6. Preparar y unir conversaciones
+    # ========================================================
+    # 5. IDENTIFICAR CLIENTES
+    # ========================================================
+
+    leads = identificar_clientes(
+        leads
+    )
+
+    # ========================================================
+    # 6. IDENTIFICAR OPORTUNIDADES
+    # ========================================================
+
+    leads = asignar_oportunidades(
+        leads
+    )
+
+    # ========================================================
+    # 7. PREPARAR CONVERSACIONES
+    # ========================================================
+
     conversaciones = preparar_conversaciones(
         datos["conversaciones"]
     )
+
+    # ========================================================
+    # 8. UNIR CONVERSACIONES
+    # ========================================================
 
     leads = unir_conversaciones(
         leads,
         conversaciones
     )
 
-    # 7. Procesar conversaciones con IA
+    leads["tiene_conversacion"] = (
+        leads["texto_conversacion"].notna()
+    )
+
+    # ========================================================
+    # 9. PROCESAR IA NUEVA
+    # ========================================================
+
     if limite_ia is not None:
 
         leads = enriquecer_conversaciones(
@@ -66,25 +173,90 @@ def ejecutar_pipeline(limite_ia=None):
             limite=limite_ia
         )
 
-        # 8. Aplicar priorización
-        leads = aplicar_priorizacion(leads)
+    # ========================================================
+    # 10. RECUPERAR IA EXISTENTE
+    # ========================================================
 
-        # 9. Ordenar resultados por prioridad
-        orden_prioridad = {
-            "ALTA": 1,
-            "MEDIA": 2,
-            "BAJA": 3,
-            "PENDIENTE_MODELO": 4,
-        }
+    extracciones_ia = cargar_extracciones_ia()
 
-        leads["orden_prioridad"] = (
-            leads["prioridad"].map(orden_prioridad)
-        )
+    leads = integrar_extracciones_ia(
+        leads,
+        extracciones_ia
+    )
 
-        leads = leads.sort_values(
-            "orden_prioridad"
-        ).drop(
-            columns="orden_prioridad"
+    # ========================================================
+    # 11. PRIORIZAR
+    # ========================================================
+
+    leads = aplicar_priorizacion(
+        leads
+    )
+
+    # ========================================================
+    # 12. ORDENAR POR PRIORIDAD
+    # ========================================================
+
+    orden_prioridad = {
+        "ALTA": 1,
+        "MEDIA": 2,
+        "BAJA": 3,
+        "PENDIENTE_MODELO": 4,
+    }
+
+    leads["orden_prioridad"] = (
+        leads["prioridad"]
+        .map(orden_prioridad)
+    )
+
+    leads = leads.sort_values(
+        by=[
+            "orden_prioridad",
+            "fecha_registro"
+        ],
+        ascending=[
+            True,
+            True
+        ],
+        na_position="last"
+    )
+
+    leads = leads.drop(
+        columns="orden_prioridad"
+    )
+
+    # ========================================================
+    # 13. CARGAR ASESORES
+    # ========================================================
+
+    asesores = cargar_asesores(
+        "asesores.csv"
+    )
+
+    # ========================================================
+    # 14. ASIGNAR ASESORES
+    # ========================================================
+
+    leads = asignar_asesores(
+        leads,
+        asesores
+    )
+
+    # ========================================================
+    # 15. GUARDAR LEADS
+    # ========================================================
+
+    guardar_leads(
+        leads
+    )
+
+    # ========================================================
+    # 16. GUARDAR EXTRACCIONES IA
+    # ========================================================
+
+    if limite_ia is not None:
+
+        guardar_extracciones_ia(
+            leads
         )
 
     return leads, datos
@@ -98,7 +270,7 @@ if __name__ == "__main__":
         "--ia",
         type=int,
         default=None,
-        help="Cantidad de conversaciones a procesar con IA"
+        help="Cantidad de conversaciones nuevas a procesar con IA"
     )
 
     args = parser.parse_args()
@@ -107,10 +279,16 @@ if __name__ == "__main__":
         limite_ia=args.ia
     )
 
-    print("Pipeline ejecutado correctamente")
+    print(
+        "Pipeline ejecutado correctamente"
+    )
+
     print()
 
-    print("Leads:", len(resultado))
+    print(
+        "Leads:",
+        len(resultado)
+    )
 
     print(
         "Clientes:",
@@ -132,26 +310,82 @@ if __name__ == "__main__":
         resultado["texto_conversacion"].isna().sum()
     )
 
-    if args.ia is not None:
-
-        print(
-            "Conversaciones procesadas con IA:",
-            args.ia
-        )
-
-        print()
-        print("Distribución de prioridades:")
-
-        print(
-            resultado["prioridad"].value_counts(
-                dropna=False
-            )
-        )
+    # ========================================================
+    # IA
+    # ========================================================
 
     print()
 
-    print("Estado de oportunidades:")
+    print(
+        "Extracciones IA disponibles:",
+        resultado["confianza_extraccion"].notna().sum()
+    )
+
+    print()
+
+    print(
+        "Distribución de prioridades:"
+    )
+
+    print(
+        resultado["prioridad"].value_counts(
+            dropna=False
+        )
+    )
+
+    # ========================================================
+    # ASESORES
+    # ========================================================
+
+    print()
+
+    print(
+        "Distribución de asignación:"
+    )
+
+    print(
+        resultado["estado_asignacion"].value_counts(
+            dropna=False
+        )
+    )
+
+    print()
+
+    print(
+        "Leads por asesor:"
+    )
+
+    asignados = resultado[
+        resultado["estado_asignacion"] == "ASIGNADO"
+    ]
+
+    if not asignados.empty:
+
+        print(
+            asignados[
+                [
+                    "asesor_id",
+                    "asesor_nombre"
+                ]
+            ].value_counts()
+        )
+
+    # ========================================================
+    # OPORTUNIDADES
+    # ========================================================
+
+    print()
+
+    print(
+        "Estado de oportunidades:"
+    )
 
     print(
         resultado["estado_oportunidad"].value_counts()
+    )
+
+    print()
+
+    print(
+        "Base de datos actualizada correctamente."
     )
