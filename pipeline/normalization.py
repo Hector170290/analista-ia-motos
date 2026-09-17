@@ -10,6 +10,9 @@ def normalizar_texto(valor):
     if valor is None:
         return None
 
+    if isinstance(valor, float) and valor != valor:
+        return None
+
     texto = str(valor).strip().lower()
 
     texto = unicodedata.normalize("NFKD", texto)
@@ -26,14 +29,27 @@ def normalizar_texto(valor):
 
 def normalizar_telefono(valor):
     """
-    Conserva únicamente los dígitos del teléfono.
+    Normaliza teléfonos colombianos.
+    Elimina caracteres no numéricos y el prefijo 57
+    cuando el número queda con 12 dígitos.
     """
+
     if valor is None:
+        return None
+
+    if isinstance(valor, float) and valor != valor:
         return None
 
     telefono = re.sub(r"\D", "", str(valor))
 
-    return telefono if telefono else None
+    if not telefono:
+        return None
+
+    # Si viene con código de país +57, conservar los 10 dígitos
+    if len(telefono) == 12 and telefono.startswith("57"):
+        telefono = telefono[2:]
+
+    return telefono
 
 
 def normalizar_dataframe(
